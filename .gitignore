@@ -1,0 +1,30 @@
+# rust
+target/
+**/*.rs.bk
+
+# foundry (will populate when contracts/ is initialized)
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# node
+node_modules/
+dist/
+build/
+.next/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# os
+.DS_Store
+Thumbs.db
