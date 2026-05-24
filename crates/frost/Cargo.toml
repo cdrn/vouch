@@ -9,3 +9,7 @@ rust-version.workspace = true
 [lib]
 
 [dependencies]
+frost-secp256k1-tr = "2"
+
+[dev-dependencies]
+rand = "0.8"
