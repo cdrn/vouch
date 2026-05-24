@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+
 [[bin]]
 name = "vouch-relay"
 path = "src/main.rs"
@@ -19,3 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
