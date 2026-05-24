@@ -1261,6 +1261,8 @@ version = "0.0.0"
 dependencies = [
  "frost-secp256k1-tr",
  "rand",
+ "rand_core",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

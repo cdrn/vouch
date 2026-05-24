@@ -1,12 +1,20 @@
 //! vouch-frost: 2-of-2 FROST (frost-secp256k1-tr) wrapper.
 //!
-//! DKG, sign, and refresh ceremonies live here. v0 hardcodes 2-of-2;
-//! curve and tweak (BIP340 taproot-compatible schnorr) are fixed.
+//! Hardcodes 2-of-2. Curve and tweak (BIP340 taproot-compatible
+//! schnorr) are fixed. Ceremony primitives live in [`dkg`] and [`sign`];
+//! both parties call into the same functions — there is no built-in
+//! coordinator/server asymmetry in this crate. The signer service and
+//! the client just call different subsets.
 
-use frost_secp256k1_tr as frost;
+mod error;
+pub mod dkg;
+pub mod sign;
 
-pub use frost::keys::{KeyPackage, PublicKeyPackage};
-pub use frost::{Identifier, Signature, VerifyingKey};
+pub use error::Error;
+pub use frost_secp256k1_tr::keys::{KeyPackage, PublicKeyPackage};
+pub use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
+pub use frost_secp256k1_tr::round2::SignatureShare;
+pub use frost_secp256k1_tr::{Identifier, Signature, SigningPackage, VerifyingKey};
 
 pub const MIN_SIGNERS: u16 = 2;
 pub const MAX_SIGNERS: u16 = 2;
@@ -18,75 +26,79 @@ pub fn identifier(n: u16) -> Identifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frost_secp256k1_tr::keys::dkg;
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
 
-    #[test]
-    fn dkg_sign_verify_happy_path() {
-        let mut rng = OsRng;
+    struct Party {
+        id: Identifier,
+        key: KeyPackage,
+        pubkey: PublicKeyPackage,
+    }
 
+    fn run_dkg_2of2<R: rand_core::RngCore + rand_core::CryptoRng>(rng: &mut R) -> (Party, Party) {
         let id_a = identifier(1);
         let id_b = identifier(2);
 
-        // DKG round 1
-        let (a_r1_secret, a_r1_pkg) =
-            dkg::part1(id_a, MAX_SIGNERS, MIN_SIGNERS, &mut rng).unwrap();
-        let (b_r1_secret, b_r1_pkg) =
-            dkg::part1(id_b, MAX_SIGNERS, MIN_SIGNERS, &mut rng).unwrap();
+        let a_r1 = dkg::round1(id_a, rng).unwrap();
+        let b_r1 = dkg::round1(id_b, rng).unwrap();
 
-        // each participant receives the OTHER's round1 package
-        let a_received_r1: BTreeMap<_, _> = [(id_b, b_r1_pkg)].into();
-        let b_received_r1: BTreeMap<_, _> = [(id_a, a_r1_pkg)].into();
+        let a_received_r1: BTreeMap<_, _> = [(id_b, b_r1.package)].into();
+        let b_received_r1: BTreeMap<_, _> = [(id_a, a_r1.package)].into();
 
-        // DKG round 2
-        let (a_r2_secret, a_r2_pkgs) =
-            dkg::part2(a_r1_secret, &a_received_r1).unwrap();
-        let (b_r2_secret, b_r2_pkgs) =
-            dkg::part2(b_r1_secret, &b_received_r1).unwrap();
+        let a_r2 = dkg::round2(a_r1.secret, &a_received_r1).unwrap();
+        let b_r2 = dkg::round2(b_r1.secret, &b_received_r1).unwrap();
 
-        // each participant sends the round2 package addressed to the other
-        let a_received_r2: BTreeMap<_, _> =
-            [(id_b, b_r2_pkgs[&id_a].clone())].into();
-        let b_received_r2: BTreeMap<_, _> =
-            [(id_a, a_r2_pkgs[&id_b].clone())].into();
+        let a_received_r2: BTreeMap<_, _> = [(id_b, b_r2.packages[&id_a].clone())].into();
+        let b_received_r2: BTreeMap<_, _> = [(id_a, a_r2.packages[&id_b].clone())].into();
 
-        // DKG part 3 (finalize)
-        let (a_key_pkg, a_pubkey_pkg) =
-            dkg::part3(&a_r2_secret, &a_received_r1, &a_received_r2).unwrap();
-        let (b_key_pkg, b_pubkey_pkg) =
-            dkg::part3(&b_r2_secret, &b_received_r1, &b_received_r2).unwrap();
+        let (a_key, a_pub) = dkg::finalize(&a_r2.secret, &a_received_r1, &a_received_r2).unwrap();
+        let (b_key, b_pub) = dkg::finalize(&b_r2.secret, &b_received_r1, &b_received_r2).unwrap();
 
-        // both parties agree on the joint pubkey
-        assert_eq!(a_pubkey_pkg.verifying_key(), b_pubkey_pkg.verifying_key());
+        (
+            Party { id: id_a, key: a_key, pubkey: a_pub },
+            Party { id: id_b, key: b_key, pubkey: b_pub },
+        )
+    }
 
-        // sign: round 1 (nonce commitments)
+    #[test]
+    fn dkg_produces_consistent_joint_pubkey() {
+        let mut rng = OsRng;
+        let (a, b) = run_dkg_2of2(&mut rng);
+        assert_eq!(a.pubkey.verifying_key(), b.pubkey.verifying_key());
+    }
+
+    #[test]
+    fn full_dkg_sign_verify() {
+        let mut rng = OsRng;
+        let (a, b) = run_dkg_2of2(&mut rng);
+
         let msg = b"vouch test message";
 
-        let (a_nonces, a_commits) =
-            frost::round1::commit(a_key_pkg.signing_share(), &mut rng);
-        let (b_nonces, b_commits) =
-            frost::round1::commit(b_key_pkg.signing_share(), &mut rng);
+        let (a_nonces, a_commits) = sign::commit(&a.key, &mut rng);
+        let (b_nonces, b_commits) = sign::commit(&b.key, &mut rng);
 
-        let commitments: BTreeMap<_, _> =
-            [(id_a, a_commits), (id_b, b_commits)].into();
-        let signing_package = frost::SigningPackage::new(commitments, msg);
+        let commits: BTreeMap<_, _> = [(a.id, a_commits), (b.id, b_commits)].into();
+        let pkg = sign::make_signing_package(commits, msg).unwrap();
 
-        // sign: round 2 (signature shares)
-        let a_share =
-            frost::round2::sign(&signing_package, &a_nonces, &a_key_pkg).unwrap();
-        let b_share =
-            frost::round2::sign(&signing_package, &b_nonces, &b_key_pkg).unwrap();
+        let a_share = sign::sign_share(&pkg, &a_nonces, &a.key).unwrap();
+        let b_share = sign::sign_share(&pkg, &b_nonces, &b.key).unwrap();
 
-        let shares: BTreeMap<_, _> = [(id_a, a_share), (id_b, b_share)].into();
+        let shares: BTreeMap<_, _> = [(a.id, a_share), (b.id, b_share)].into();
+        let sig = sign::aggregate(&pkg, &shares, &a.pubkey).unwrap();
 
-        // aggregate + verify
-        let group_sig =
-            frost::aggregate(&signing_package, &shares, &a_pubkey_pkg).unwrap();
-
-        a_pubkey_pkg
+        a.pubkey
             .verifying_key()
-            .verify(msg, &group_sig)
+            .verify(msg, &sig)
             .expect("aggregated signature must verify under joint pubkey");
+    }
+
+    #[test]
+    fn rejects_wrong_commitment_count() {
+        let mut rng = OsRng;
+        let (a, _b) = run_dkg_2of2(&mut rng);
+        let (_nonces, commits) = sign::commit(&a.key, &mut rng);
+        let only_one: BTreeMap<_, _> = [(a.id, commits)].into();
+        let err = sign::make_signing_package(only_one, b"msg").unwrap_err();
+        assert!(matches!(err, Error::Invariant(_)));
     }
 }
