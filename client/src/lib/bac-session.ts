@@ -156,7 +156,7 @@ function deriveSessionKey(seed: Uint8Array, counter: number): Uint8Array {
   const input = bacConcat(seed, u32be(counter));
   const md = forge.md.sha1.create();
   md.update(forge.util.binary.raw.encode(input));
-  const out = forge.util.binary.raw.decode(md.digest().bytes()) as Uint8Array;
+  const out = new Uint8Array(forge.util.binary.raw.decode(md.digest().bytes()));
   const km = out.slice(0, 16);
   return adjustParity(km);
 }
@@ -200,7 +200,7 @@ export function wrapApdu(
   const header = new Uint8Array([cla | 0x0c, ins, p1, p2]);
   const paddedHeader = isoPad(header);
 
-  let do87 = new Uint8Array();
+  let do87: Uint8Array = new Uint8Array();
   if (data && data.length > 0) {
     // DO'87' = 87 | len | 01 | encrypted(padded(data))
     const padded = isoPad(data);
@@ -272,7 +272,7 @@ export function unwrapResponse(
   }
 
   // Decrypt DO'87' if present.
-  let data = new Uint8Array();
+  let data: Uint8Array = new Uint8Array();
   if (do87Body) {
     if (do87Body[0] !== 0x01) throw new Error("DO'87' missing padding indicator");
     const ct = do87Body.slice(1);

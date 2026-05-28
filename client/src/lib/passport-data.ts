@@ -296,8 +296,7 @@ export function computeHPassport(p: ParsedMrz): Uint8Array {
   md.update(sha256Hex(p.primaryIdentifier + "<<" + p.secondaryIdentifier));
   md.update("\0");
   md.update(sha256Hex(p.documentNumber));
-  const digestBytes = forge.util.binary.raw.decode(md.digest().bytes());
-  return digestBytes;
+  return new Uint8Array(forge.util.binary.raw.decode(md.digest().bytes()));
 }
 
 function sha256Hex(s: string): string {

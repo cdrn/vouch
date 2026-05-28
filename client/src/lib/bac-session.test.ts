@@ -95,7 +95,7 @@ function deriveSpecKey(seed: Uint8Array, c: number): Uint8Array {
   const cBytes = new Uint8Array([0, 0, 0, c]);
   const md = forge.md.sha1.create();
   md.update(forge.util.binary.raw.encode(bacConcat(seed, cBytes)));
-  const out = forge.util.binary.raw.decode(md.digest().bytes()) as Uint8Array;
+  const out = new Uint8Array(forge.util.binary.raw.decode(md.digest().bytes()));
   return out.slice(0, 16);
 }
 

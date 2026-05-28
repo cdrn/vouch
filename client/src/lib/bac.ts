@@ -30,7 +30,10 @@ function bytesToForge(b: Uint8Array): string {
 }
 
 function forgeToBytes(s: string): Uint8Array {
-  return forge.util.binary.raw.decode(s);
+  // Forge's raw decode returns a Uint8Array with an implementation-defined
+  // backing buffer; copy into a fresh one so TS 6's stricter Uint8Array
+  // generic doesn't reject downstream operations.
+  return new Uint8Array(forge.util.binary.raw.decode(s));
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
@@ -157,8 +160,11 @@ export function des3CbcDecrypt(ciphertext: Uint8Array, key16: Uint8Array): Uint8
   const decipher = forge.cipher.createDecipher("3DES-CBC", bytesToForge(expand3Key(key16)));
   decipher.start({ iv: bytesToForge(new Uint8Array(8)) });
   decipher.update(forge.util.createBuffer(bytesToForge(ciphertext)));
-  // pass false to skip PKCS#7 unpadding; BAC handles padding itself
-  if (!decipher.finish(() => true)) throw new Error("3DES-CBC decrypt failed");
+  // Forge accepts a callback to override its padding check; the older
+  // @types/node-forge declares finish() with no args, so cast through.
+  if (!(decipher as unknown as { finish: (pad: () => boolean) => boolean }).finish(() => true)) {
+    throw new Error("3DES-CBC decrypt failed");
+  }
   return forgeToBytes(decipher.output.bytes()).slice(0, ciphertext.length);
 }
 
@@ -188,7 +194,9 @@ export function retailMac(key16: Uint8Array, data: Uint8Array): Uint8Array {
   const dec = forge.cipher.createDecipher("DES-ECB", bytesToForge(k2));
   dec.start({});
   dec.update(forge.util.createBuffer(bytesToForge(last)));
-  if (!dec.finish(() => true)) throw new Error("DES-ECB decrypt failed");
+  if (!(dec as unknown as { finish: (pad: () => boolean) => boolean }).finish(() => true)) {
+    throw new Error("DES-ECB decrypt failed");
+  }
   const mid = forgeToBytes(dec.output.bytes()).slice(0, 8);
 
   const enc = forge.cipher.createCipher("DES-ECB", bytesToForge(k1));

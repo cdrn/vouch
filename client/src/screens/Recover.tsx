@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -10,19 +10,21 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import { nfcSupported, scanPassportAndProve } from "../lib/passport";
+import { nfcSupported, scanPassport } from "../lib/passport";
+import type { PassportReadResult } from "../lib/passport";
 import type { RootStackParamList } from "../navigation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Recover">;
 
-type Stage = "mrz" | "scanning" | "proving" | "submitting" | "done" | "error";
+type Stage = "mrz" | "scanning" | "done" | "error";
 
-export function RecoverScreen({ navigation }: Props) {
+export function RecoverScreen({ navigation: _navigation }: Props) {
   const [docNumber, setDocNumber] = useState("");
-  const [dob, setDob] = useState(""); // YYMMDD
-  const [expiry, setExpiry] = useState(""); // YYMMDD
+  const [dob, setDob] = useState("");
+  const [expiry, setExpiry] = useState("");
   const [stage, setStage] = useState<Stage>("mrz");
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<PassportReadResult | null>(null);
   const [nfcAvailable, setNfcAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -31,30 +33,33 @@ export function RecoverScreen({ navigation }: Props) {
 
   async function onTap() {
     setError(null);
+    setResult(null);
     setStage("scanning");
     try {
-      const proof = await scanPassportAndProve({
-        mrz: { documentNumber: docNumber.toUpperCase(), dateOfBirth: dob, expiryDate: expiry },
-        challenge: `recover-${Date.now()}`,
+      const r = await scanPassport({
+        documentNumber: docNumber.toUpperCase(),
+        dateOfBirth: dob,
+        dateOfExpiry: expiry,
       });
-      setStage("submitting");
-      // TODO: POST proof to signer's /v0/recover endpoint, get new
-      // joint pubkey + new device share, save, then navigate to Wallet.
-      throw new Error("signer /v0/recover not implemented yet");
+      setResult(r);
+      setStage("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStage("error");
     }
   }
 
+  const inputsReady = docNumber.length > 0 && dob.length === 6 && expiry.length === 6;
+  const busy = stage === "scanning";
+
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Recover from passport</Text>
       <Text style={styles.subtitle}>
-        Enter the three values from your passport MRZ so we can authenticate to
-        the chip, then tap your passport to the back of your phone. The proof
-        is generated on-device; your name, country and document number never
-        leave your phone.
+        Enter the three MRZ values, then hold your passport flat against the back of
+        your phone. BAC runs over NFC, DG1 is read, the commitment is computed
+        on-device, and the result is sent to the signer. Your name and document number
+        never leave the device.
       </Text>
 
       {nfcAvailable === false && (
@@ -72,6 +77,7 @@ export function RecoverScreen({ navigation }: Props) {
           placeholder="XX1234567"
           autoCapitalize="characters"
           autoCorrect={false}
+          editable={!busy}
         />
 
         <Text style={styles.label}>Date of birth (YYMMDD)</Text>
@@ -82,6 +88,7 @@ export function RecoverScreen({ navigation }: Props) {
           placeholder="900115"
           keyboardType="number-pad"
           maxLength={6}
+          editable={!busy}
         />
 
         <Text style={styles.label}>Expiry date (YYMMDD)</Text>
@@ -92,24 +99,19 @@ export function RecoverScreen({ navigation }: Props) {
           placeholder="320615"
           keyboardType="number-pad"
           maxLength={6}
+          editable={!busy}
         />
       </View>
 
       <TouchableOpacity
-        style={[styles.button, stage !== "mrz" && stage !== "error" && styles.buttonDisabled]}
+        style={[styles.button, (!inputsReady || busy) && styles.buttonDisabled]}
         onPress={onTap}
-        disabled={stage !== "mrz" && stage !== "error"}
+        disabled={!inputsReady || busy}
       >
-        {stage === "scanning" || stage === "proving" || stage === "submitting" ? (
+        {busy ? (
           <View style={styles.row}>
             <ActivityIndicator color="#fff" />
-            <Text style={styles.buttonText}>
-              {stage === "scanning"
-                ? "Hold passport near phone…"
-                : stage === "proving"
-                  ? "Generating proof…"
-                  : "Submitting to signer…"}
-            </Text>
+            <Text style={styles.buttonText}>Hold passport near phone…</Text>
           </View>
         ) : (
           <Text style={styles.buttonText}>Tap passport</Text>
@@ -122,21 +124,51 @@ export function RecoverScreen({ navigation }: Props) {
         </View>
       )}
 
-      <TouchableOpacity onPress={() => navigation.goBack()}>
-        <Text style={styles.secondary}>← Back</Text>
-      </TouchableOpacity>
-    </View>
+      {result && (
+        <View style={styles.resultBox}>
+          <Text style={styles.section}>Read</Text>
+
+          <Text style={styles.label}>Name</Text>
+          <Text style={styles.mono}>
+            {result.mrz.primaryIdentifier}, {result.mrz.secondaryIdentifier}
+          </Text>
+
+          <Text style={styles.label}>Country / nationality</Text>
+          <Text style={styles.mono}>
+            {result.mrz.issuingCountry} / {result.mrz.nationality}
+          </Text>
+
+          <Text style={styles.label}>Date of birth</Text>
+          <Text style={styles.mono}>{result.mrz.dateOfBirth}</Text>
+
+          <Text style={styles.label}>Document number</Text>
+          <Text style={styles.mono}>{result.mrz.documentNumber}</Text>
+
+          <Text style={styles.label}>H_passport (will be sent to signer)</Text>
+          <Text style={styles.mono} selectable>
+            0x{result.hPassportHex}
+          </Text>
+
+          <Text style={styles.note}>
+            TODO: POST this commitment + a new device pubkey to the signer's
+            /v0/recover endpoint, run a fresh DKG, rotate the SCA's pubX.
+          </Text>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, backgroundColor: "#fff", gap: 16 },
+  container: { padding: 24, backgroundColor: "#fff", gap: 16 },
   title: { fontSize: 28, fontWeight: "700" },
   subtitle: { fontSize: 14, color: "#555", lineHeight: 20 },
   warning: { padding: 12, backgroundColor: "#fff4d4", borderRadius: 8 },
   warningText: { color: "#7a5b00", fontSize: 13 },
   fieldGroup: { gap: 8, marginTop: 12 },
   label: { fontSize: 12, color: "#888", fontWeight: "600", textTransform: "uppercase" },
+  mono: { fontFamily: "Menlo", fontSize: 12, color: "#222" },
+  section: { fontSize: 16, fontWeight: "600", marginTop: 4, marginBottom: 8 },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -150,17 +182,21 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 8,
     alignItems: "center",
-    marginTop: 24,
+    marginTop: 16,
   },
-  buttonDisabled: { opacity: 0.5 },
+  buttonDisabled: { opacity: 0.4 },
   buttonText: { color: "#fff", fontWeight: "600" },
   row: { flexDirection: "row", gap: 12, alignItems: "center" },
-  errorBox: {
-    marginTop: 8,
-    padding: 12,
-    backgroundColor: "#ffe5e5",
-    borderRadius: 8,
+  errorBox: { padding: 12, backgroundColor: "#ffe5e5", borderRadius: 8 },
+  errorText: { color: "#a01a1a", fontSize: 13, fontFamily: "Menlo" },
+  resultBox: { padding: 16, backgroundColor: "#f5f5f5", borderRadius: 8, gap: 4 },
+  note: {
+    marginTop: 12,
+    padding: 8,
+    backgroundColor: "#e8f0ff",
+    borderRadius: 4,
+    fontSize: 11,
+    color: "#1a3a7a",
+    fontFamily: "Menlo",
   },
-  errorText: { color: "#a01a1a", fontSize: 13 },
-  secondary: { color: "#0a7", textAlign: "center", marginTop: 16 },
 });
