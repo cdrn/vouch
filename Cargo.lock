@@ -1532,7 +1532,9 @@ name = "vouch-frost"
 version = "0.0.0"
 dependencies = [
  "frost-secp256k1-tr",
+ "hex",
  "rand",
+ "rand_chacha",
  "rand_core",
  "thiserror 2.0.18",
 ]
