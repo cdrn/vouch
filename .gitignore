@@ -13,6 +13,14 @@ dist/
 build/
 .next/
 
+# expo / react native
+client/ios/
+client/android/
+client/.expo/
+client/expo-env.d.ts
+client/*.tsbuildinfo
+client/web-build/
+
 # env
 .env
 .env.local

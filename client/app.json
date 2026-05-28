@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "vouch",
+    "slug": "vouch-wallet",
+    "scheme": "vouch",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "xyz.vouch.wallet",
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Vouch needs to read your passport over NFC to verify your identity during account recovery.",
+        "com.apple.developer.nfc.readersession.iso7816.select-identifiers": [
+          "A0000002471001"
+        ]
+      },
+      "entitlements": {
+        "com.apple.developer.nfc.readersession.formats": [
+          "TAG"
+        ]
+      }
+    },
+    "android": {
+      "package": "xyz.vouch.wallet",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.NFC"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Vouch needs to read your passport over NFC to verify your identity during account recovery.",
+          "selectIdentifiers": [
+            "A0000002471001"
+          ]
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
