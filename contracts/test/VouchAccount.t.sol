@@ -16,47 +16,26 @@ contract VouchAccountTest is Test {
     VouchAccount account;
 
     function setUp() public {
-        bytes memory code = vm.getDeployedCode("VouchAccount.sol:VouchAccount");
-        vm.etch(ACCOUNT_ADDR, code);
+        // Build the runtime code by deploying with PUB_X, then etch at the
+        // pinned address — this gives us deterministic address + immutable.
+        VouchAccount tmp = new VouchAccount(PUB_X);
+        vm.etch(ACCOUNT_ADDR, address(tmp).code);
+        // Copy the immutable slot too. Foundry's vm.etch copies code but
+        // immutables are baked into the runtime code, so this just works.
         account = VouchAccount(payable(ACCOUNT_ADDR));
-        // foundry's default chainid is 31337 — the opHash below assumes this.
         vm.chainId(31337);
     }
 
-    function test_InitializeRejectsNonSelf() public {
-        vm.prank(address(0xBEEF));
-        vm.expectRevert(VouchAccount.OnlySelf.selector);
-        account.initialize(PUB_X);
-    }
-
-    function test_InitializeFromSelfSucceeds() public {
-        vm.prank(ACCOUNT_ADDR);
-        account.initialize(PUB_X);
+    function test_PubKeyStoredAtDeploy() public view {
         assertEq(account.pubX(), PUB_X);
-        assertTrue(account.initialized());
     }
 
-    function test_InitializeOnceOnly() public {
-        vm.prank(ACCOUNT_ADDR);
-        account.initialize(PUB_X);
-        vm.prank(ACCOUNT_ADDR);
-        vm.expectRevert(VouchAccount.AlreadyInitialized.selector);
-        account.initialize(PUB_X);
-    }
-
-    function test_InitializeRejectsZeroPubKey() public {
-        vm.prank(ACCOUNT_ADDR);
+    function test_ConstructorRejectsZeroPubKey() public {
         vm.expectRevert(VouchAccount.InvalidPubKey.selector);
-        account.initialize(0);
+        new VouchAccount(0);
     }
 
-    function test_ExecuteUninitializedReverts() public {
-        bytes memory sig = new bytes(64);
-        vm.expectRevert(VouchAccount.NotInitialized.selector);
-        account.execute(address(0), 0, "", sig);
-    }
-
-    /// End-to-end: deploy + init + execute with a real vouch-frost-aggregated
+    /// End-to-end: deploy + execute with a real vouch-frost-aggregated
     /// schnorr signature over the contract's computed opHash.
     ///
     /// The signature below was produced by:
@@ -64,9 +43,6 @@ contract VouchAccountTest is Test {
     ///      chainid=31337, account=0x1234...) → 0xbf641d18...72cfcd
     ///   2. cargo run -p vouch-frost --example gen_test_vector -- bf641d18...72cfcd
     function test_ExecuteWithVouchFrostSig() public {
-        vm.prank(ACCOUNT_ADDR);
-        account.initialize(PUB_X);
-
         address target = 0xCAFE000000000000000000000000000000000000;
         uint256 value = 0;
         bytes memory data = "";
@@ -82,17 +58,11 @@ contract VouchAccountTest is Test {
             hex"57f79e02eaed93119963b89fc96455005b6f9d4209111454a0def9cf1f5ad299"
             hex"93bd21dde2e12e892dd8fa3f7b2140db3bc169be4ed2852994ff0b9486c05fa3";
 
-        // Execute. With no code at target, the call still succeeds (calling
-        // an EOA returns true with empty data).
         account.execute(target, value, data, sig);
-
         assertEq(account.nonce(), 1, "nonce must increment after execute");
     }
 
     function test_ExecuteWithBadSigReverts() public {
-        vm.prank(ACCOUNT_ADDR);
-        account.initialize(PUB_X);
-
         bytes memory badSig = new bytes(64);
         vm.expectRevert(VouchAccount.InvalidSignature.selector);
         account.execute(address(0xCAFE), 0, "", badSig);
