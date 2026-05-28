@@ -37,6 +37,7 @@ async fn dkg_via_http(
         relay_url: relay_url.to_string(),
         signer_participant: signer_id,
         client_participant: client_id,
+        h_passport_hex: None,
     };
 
     let signer_call_url = format!("{signer_url}/v0/dkg");

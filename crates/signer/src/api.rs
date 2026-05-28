@@ -8,6 +8,11 @@ pub struct DkgRequest {
     pub relay_url: String,
     pub signer_participant: u16,
     pub client_participant: u16,
+    /// Optional H_passport (32-byte hex commitment over stable passport
+    /// attributes). When supplied, the signer indexes the resulting
+    /// account by this commitment so /v0/recover can look it up.
+    #[serde(default)]
+    pub h_passport_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,4 +40,19 @@ pub struct SignResponse {
     /// Hex-encoded postcard-serialized FROST `Signature`. Switch to
     /// canonical 64-byte BIP340 bytes when we need to ship it onchain.
     pub signature_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoverRequest {
+    /// 32-byte H_passport commitment (hex). The signer looks up which
+    /// account this commitment was registered against at DKG time.
+    pub h_passport_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoverResponse {
+    /// Hex-encoded joint pubkey of the account this passport unlocks.
+    pub account_pubkey_hex: String,
+    /// True if the H_passport matched a known account.
+    pub matched: bool,
 }
