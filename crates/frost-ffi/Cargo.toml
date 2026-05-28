@@ -1,0 +1,26 @@
+[package]
+name = "vouch-frost-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "vouch_frost_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+vouch-frost = { path = "../frost" }
+postcard = { version = "1", features = ["use-std"] }
+rand_core = "0.6"
+rand = "0.8"
+thiserror.workspace = true
+uniffi = { version = "0.28", features = ["cli"] }
+
+[dev-dependencies]
+rand_chacha = "0.3"
+
+[[bin]]
+name = "vouch-frost-uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
