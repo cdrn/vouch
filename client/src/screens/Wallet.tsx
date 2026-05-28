@@ -11,19 +11,23 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import { runClientSign } from "../lib/frost";
-import { loadAccount, loadShare } from "../lib/storage";
+import { walletSignExecute } from "../lib/signer";
+import { clearAccount, loadAccount, loadSignerUrl } from "../lib/storage";
 import type { RootStackParamList } from "../navigation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Wallet">;
 
 export function WalletScreen({ navigation }: Props) {
-  const [pubX, setPubX] = useState<string | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  const [pubX, setPubX] = useState<string | null>(null);
+  const [signerUrl, setSignerUrl] = useState<string | null>(null);
+
   const [target, setTarget] = useState("0xCAFE000000000000000000000000000000000000");
+  const [value, setValue] = useState("0");
   const [data, setData] = useState("0x");
+
   const [busy, setBusy] = useState(false);
-  const [lastSig, setLastSig] = useState<string | null>(null);
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -32,35 +36,22 @@ export function WalletScreen({ navigation }: Props) {
         navigation.replace("Onboarding");
         return;
       }
-      setPubX(acct.pubX);
       setAddress(acct.address);
+      setPubX(acct.pubX);
+      setSignerUrl(await loadSignerUrl());
     })();
   }, [navigation]);
 
-  async function onSign() {
-    if (!pubX) return;
+  async function onSignExecute() {
+    if (!address || !signerUrl) return;
     setBusy(true);
+    setLastTxHash(null);
     try {
-      const share = await loadShare();
-      if (!share) throw new Error("device share missing — re-onboard or recover");
-
-      // For the demo, the "op hash" is just keccak(target || data) — the
-      // production version is the SCA's opHash() that binds chainid + account.
-      // Without a JS keccak in this stub, just sign a deterministic 32-byte
-      // mock. Real wiring lands when the SCA is in the loop.
-      const mockOpHash = "0".repeat(64);
-
-      const sig = await runClientSign({
-        relayUrl: "ws://localhost:8088/ws",
-        signerUrl: "http://localhost:8089",
-        sessionId: `sign-${Date.now()}`,
-        clientParticipant: 1,
-        signerParticipant: 2,
-        share,
-        pubX,
-        opHash: mockOpHash,
-      });
-      setLastSig(sig);
+      const resp = await walletSignExecute(
+        { account_address: address, target, value, data },
+        { baseUrl: signerUrl }
+      );
+      setLastTxHash(resp.tx_hash);
     } catch (err) {
       Alert.alert("Sign failed", err instanceof Error ? err.message : String(err));
     } finally {
@@ -68,43 +59,58 @@ export function WalletScreen({ navigation }: Props) {
     }
   }
 
+  async function onSignOut() {
+    await clearAccount();
+    navigation.replace("Onboarding");
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.label}>Joint pubkey</Text>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <Text style={styles.label}>Account address</Text>
       <Text style={styles.mono} selectable>
-        {pubX ?? "—"}
+        {address ?? "—"}
       </Text>
 
-      <Text style={styles.label}>Address</Text>
+      <Text style={styles.label}>Joint pubkey (BIP340 x-only)</Text>
       <Text style={styles.mono} selectable>
-        {address || "(not yet deployed)"}
+        {pubX ? `0x${pubX}` : "—"}
       </Text>
 
       <View style={styles.spacer} />
+      <Text style={styles.section}>Sign + execute a userop</Text>
 
-      <Text style={styles.section}>Sign a userop</Text>
-
-      <Text style={styles.label}>Target</Text>
+      <Text style={styles.label}>Target address</Text>
       <TextInput
         style={styles.input}
         value={target}
         onChangeText={setTarget}
         autoCapitalize="none"
         autoCorrect={false}
+        editable={!busy}
       />
 
-      <Text style={styles.label}>Call data</Text>
+      <Text style={styles.label}>Value (wei, decimal)</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={setValue}
+        keyboardType="number-pad"
+        editable={!busy}
+      />
+
+      <Text style={styles.label}>Call data (hex)</Text>
       <TextInput
         style={styles.input}
         value={data}
         onChangeText={setData}
         autoCapitalize="none"
         autoCorrect={false}
+        editable={!busy}
       />
 
       <TouchableOpacity
         style={[styles.button, busy && styles.buttonDisabled]}
-        onPress={onSign}
+        onPress={onSignExecute}
         disabled={busy}
       >
         {busy ? (
@@ -114,27 +120,33 @@ export function WalletScreen({ navigation }: Props) {
         )}
       </TouchableOpacity>
 
-      {lastSig && (
-        <View style={styles.sigBox}>
-          <Text style={styles.label}>Last signature</Text>
+      {lastTxHash && (
+        <View style={styles.txBox}>
+          <Text style={styles.label}>Transaction hash</Text>
           <Text style={styles.mono} selectable>
-            {lastSig}
+            {lastTxHash}
           </Text>
         </View>
       )}
 
+      <View style={styles.spacer} />
+
       <TouchableOpacity onPress={() => navigation.navigate("Recover")}>
         <Text style={styles.secondary}>Lost your device? Recover from passport →</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={onSignOut}>
+        <Text style={styles.danger}>Sign out (clear local account)</Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, gap: 12, backgroundColor: "#fff" },
+  container: { padding: 24, gap: 8, backgroundColor: "#fff" },
   label: { fontSize: 12, color: "#888", fontWeight: "600", textTransform: "uppercase" },
-  mono: { fontFamily: "Menlo", fontSize: 11, color: "#333" },
-  section: { fontSize: 18, fontWeight: "600", marginTop: 8 },
+  mono: { fontFamily: "Menlo", fontSize: 11, color: "#222" },
+  section: { fontSize: 18, fontWeight: "600", marginTop: 12 },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -148,11 +160,12 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 8,
     alignItems: "center",
-    marginTop: 16,
+    marginTop: 12,
   },
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: "#fff", fontWeight: "600" },
-  sigBox: { marginTop: 16, padding: 12, backgroundColor: "#f5f5f5", borderRadius: 8 },
-  secondary: { color: "#0a7", textAlign: "center", marginTop: 24 },
+  txBox: { marginTop: 12, padding: 12, backgroundColor: "#eef9f0", borderRadius: 8 },
+  secondary: { color: "#0a7", textAlign: "center", marginTop: 16 },
+  danger: { color: "#a01a1a", textAlign: "center", marginTop: 12, fontSize: 13 },
   spacer: { height: 8 },
 });

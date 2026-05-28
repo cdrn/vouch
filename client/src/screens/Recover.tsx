@@ -10,30 +10,39 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import { nfcSupported, scanPassport } from "../lib/passport";
-import type { PassportReadResult } from "../lib/passport";
+import { nfcSupported, scanPassport, type PassportReadResult } from "../lib/passport";
+import { walletRecover } from "../lib/signer";
+import { loadSignerUrl, saveAccount } from "../lib/storage";
 import type { RootStackParamList } from "../navigation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Recover">;
 
-type Stage = "mrz" | "scanning" | "done" | "error";
+type Stage = "mrz" | "scanning" | "submitting" | "done" | "error";
 
-export function RecoverScreen({ navigation: _navigation }: Props) {
+export function RecoverScreen({ navigation }: Props) {
   const [docNumber, setDocNumber] = useState("");
   const [dob, setDob] = useState("");
   const [expiry, setExpiry] = useState("");
   const [stage, setStage] = useState<Stage>("mrz");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PassportReadResult | null>(null);
+  const [rotationTxHash, setRotationTxHash] = useState<string | null>(null);
+  const [newPubX, setNewPubX] = useState<string | null>(null);
+  const [accountAddress, setAccountAddress] = useState<string | null>(null);
   const [nfcAvailable, setNfcAvailable] = useState<boolean | null>(null);
+  const [signerUrl, setSignerUrlState] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => setNfcAvailable(await nfcSupported()))();
+    (async () => {
+      setNfcAvailable(await nfcSupported());
+      setSignerUrlState(await loadSignerUrl());
+    })();
   }, []);
 
   async function onTap() {
     setError(null);
     setResult(null);
+    setRotationTxHash(null);
     setStage("scanning");
     try {
       const r = await scanPassport({
@@ -42,6 +51,22 @@ export function RecoverScreen({ navigation: _navigation }: Props) {
         dateOfExpiry: expiry,
       });
       setResult(r);
+      setStage("submitting");
+
+      const resp = await walletRecover(
+        { h_passport_hex: r.hPassportHex },
+        signerUrl ? { baseUrl: signerUrl } : undefined
+      );
+
+      setAccountAddress(resp.account_address);
+      setNewPubX(resp.new_pub_x_hex);
+      setRotationTxHash(resp.rotation_tx_hash);
+
+      // Persist locally so the Wallet screen picks up the recovered account.
+      await saveAccount({
+        address: resp.account_address,
+        pubX: resp.new_pub_x_hex,
+      });
       setStage("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -50,16 +75,16 @@ export function RecoverScreen({ navigation: _navigation }: Props) {
   }
 
   const inputsReady = docNumber.length > 0 && dob.length === 6 && expiry.length === 6;
-  const busy = stage === "scanning";
+  const busy = stage === "scanning" || stage === "submitting";
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Recover from passport</Text>
       <Text style={styles.subtitle}>
-        Enter the three MRZ values, then hold your passport flat against the back of
-        your phone. BAC runs over NFC, DG1 is read, the commitment is computed
-        on-device, and the result is sent to the signer. Your name and document number
-        never leave the device.
+        Enter the three MRZ values, then hold your passport flat against the back
+        of your phone. BAC runs over NFC, DG1 is read, H_passport is computed
+        on-device, and the signer rotates the SCA's pubkey onchain. Your name and
+        document number never leave the device.
       </Text>
 
       {nfcAvailable === false && (
@@ -111,7 +136,11 @@ export function RecoverScreen({ navigation: _navigation }: Props) {
         {busy ? (
           <View style={styles.row}>
             <ActivityIndicator color="#fff" />
-            <Text style={styles.buttonText}>Hold passport near phone…</Text>
+            <Text style={styles.buttonText}>
+              {stage === "scanning"
+                ? "Hold passport near phone…"
+                : "Rotating onchain…"}
+            </Text>
           </View>
         ) : (
           <Text style={styles.buttonText}>Tap passport</Text>
@@ -126,7 +155,7 @@ export function RecoverScreen({ navigation: _navigation }: Props) {
 
       {result && (
         <View style={styles.resultBox}>
-          <Text style={styles.section}>Read</Text>
+          <Text style={styles.section}>Passport read</Text>
 
           <Text style={styles.label}>Name</Text>
           <Text style={styles.mono}>
@@ -138,37 +167,57 @@ export function RecoverScreen({ navigation: _navigation }: Props) {
             {result.mrz.issuingCountry} / {result.mrz.nationality}
           </Text>
 
-          <Text style={styles.label}>Date of birth</Text>
-          <Text style={styles.mono}>{result.mrz.dateOfBirth}</Text>
-
-          <Text style={styles.label}>Document number</Text>
-          <Text style={styles.mono}>{result.mrz.documentNumber}</Text>
-
-          <Text style={styles.label}>H_passport (will be sent to signer)</Text>
+          <Text style={styles.label}>H_passport (sent to signer)</Text>
           <Text style={styles.mono} selectable>
             0x{result.hPassportHex}
           </Text>
-
-          <Text style={styles.note}>
-            TODO: POST this commitment + a new device pubkey to the signer's
-            /v0/recover endpoint, run a fresh DKG, rotate the SCA's pubX.
-          </Text>
         </View>
+      )}
+
+      {rotationTxHash && (
+        <View style={styles.successBox}>
+          <Text style={styles.section}>Recovered onchain</Text>
+          <Text style={styles.label}>Account</Text>
+          <Text style={styles.mono} selectable>
+            {accountAddress}
+          </Text>
+          <Text style={styles.label}>New pubkey</Text>
+          <Text style={styles.mono} selectable>
+            0x{newPubX}
+          </Text>
+          <Text style={styles.label}>Rotation tx</Text>
+          <Text style={styles.mono} selectable>
+            {rotationTxHash}
+          </Text>
+
+          <TouchableOpacity
+            style={styles.successButton}
+            onPress={() => navigation.replace("Wallet")}
+          >
+            <Text style={styles.buttonText}>Open wallet</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {stage !== "done" && (
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.secondary}>← Back</Text>
+        </TouchableOpacity>
       )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, backgroundColor: "#fff", gap: 16 },
+  container: { padding: 24, backgroundColor: "#fff", gap: 12 },
   title: { fontSize: 28, fontWeight: "700" },
   subtitle: { fontSize: 14, color: "#555", lineHeight: 20 },
   warning: { padding: 12, backgroundColor: "#fff4d4", borderRadius: 8 },
   warningText: { color: "#7a5b00", fontSize: 13 },
-  fieldGroup: { gap: 8, marginTop: 12 },
+  fieldGroup: { gap: 8, marginTop: 8 },
   label: { fontSize: 12, color: "#888", fontWeight: "600", textTransform: "uppercase" },
-  mono: { fontFamily: "Menlo", fontSize: 12, color: "#222" },
-  section: { fontSize: 16, fontWeight: "600", marginTop: 4, marginBottom: 8 },
+  mono: { fontFamily: "Menlo", fontSize: 11, color: "#222" },
+  section: { fontSize: 16, fontWeight: "600", marginBottom: 8 },
   input: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -190,13 +239,13 @@ const styles = StyleSheet.create({
   errorBox: { padding: 12, backgroundColor: "#ffe5e5", borderRadius: 8 },
   errorText: { color: "#a01a1a", fontSize: 13, fontFamily: "Menlo" },
   resultBox: { padding: 16, backgroundColor: "#f5f5f5", borderRadius: 8, gap: 4 },
-  note: {
+  successBox: { padding: 16, backgroundColor: "#eef9f0", borderRadius: 8, gap: 4 },
+  successButton: {
+    backgroundColor: "#0a7",
+    padding: 14,
+    borderRadius: 8,
+    alignItems: "center",
     marginTop: 12,
-    padding: 8,
-    backgroundColor: "#e8f0ff",
-    borderRadius: 4,
-    fontSize: 11,
-    color: "#1a3a7a",
-    fontFamily: "Menlo",
   },
+  secondary: { color: "#0a7", textAlign: "center", marginTop: 12 },
 });

@@ -1,35 +1,41 @@
 // Secure storage backed by iOS Keychain / Android Keystore (via
-// expo-secure-store). Holds the user's FROST share and account
-// metadata. Never written to disk in plaintext.
+// expo-secure-store). v0 demo holds account metadata + the user's MRZ
+// (needed for re-scanning during recovery on the same device). v1 will
+// also store the device's FROST share once UniFFI ships.
 
 import * as SecureStore from "expo-secure-store";
 
-const KEY_SHARE = "vouch.share";
-const KEY_ACCOUNT_PUBKEY = "vouch.accountPubX";
-const KEY_ACCOUNT_ADDR = "vouch.accountAddress";
+const KEY_ACCOUNT_ADDRESS = "vouch.accountAddress";
+const KEY_ACCOUNT_PUBX = "vouch.accountPubX";
+const KEY_SIGNER_URL = "vouch.signerUrl";
 
-export async function saveShare(shareBytesHex: string): Promise<void> {
-  await SecureStore.setItemAsync(KEY_SHARE, shareBytesHex, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED,
-  });
+export async function saveAccount(opts: {
+  address: string;
+  pubX: string;
+}): Promise<void> {
+  await SecureStore.setItemAsync(KEY_ACCOUNT_ADDRESS, opts.address);
+  await SecureStore.setItemAsync(KEY_ACCOUNT_PUBX, opts.pubX);
 }
 
-export async function loadShare(): Promise<string | null> {
-  return SecureStore.getItemAsync(KEY_SHARE);
+export async function loadAccount(): Promise<{
+  address: string;
+  pubX: string;
+} | null> {
+  const address = await SecureStore.getItemAsync(KEY_ACCOUNT_ADDRESS);
+  const pubX = await SecureStore.getItemAsync(KEY_ACCOUNT_PUBX);
+  if (!address || !pubX) return null;
+  return { address, pubX };
 }
 
-export async function clearShare(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEY_SHARE);
+export async function clearAccount(): Promise<void> {
+  await SecureStore.deleteItemAsync(KEY_ACCOUNT_ADDRESS);
+  await SecureStore.deleteItemAsync(KEY_ACCOUNT_PUBX);
 }
 
-export async function saveAccount(pubXHex: string, address: string): Promise<void> {
-  await SecureStore.setItemAsync(KEY_ACCOUNT_PUBKEY, pubXHex);
-  await SecureStore.setItemAsync(KEY_ACCOUNT_ADDR, address);
+export async function saveSignerUrl(url: string): Promise<void> {
+  await SecureStore.setItemAsync(KEY_SIGNER_URL, url);
 }
 
-export async function loadAccount(): Promise<{ pubX: string; address: string } | null> {
-  const pubX = await SecureStore.getItemAsync(KEY_ACCOUNT_PUBKEY);
-  const address = await SecureStore.getItemAsync(KEY_ACCOUNT_ADDR);
-  if (!pubX || !address) return null;
-  return { pubX, address };
+export async function loadSignerUrl(): Promise<string | null> {
+  return SecureStore.getItemAsync(KEY_SIGNER_URL);
 }
