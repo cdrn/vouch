@@ -2,11 +2,10 @@
 target/
 **/*.rs.bk
 
-# foundry (will populate when contracts/ is initialized)
+# foundry
 contracts/out/
 contracts/cache/
 contracts/broadcast/
-contracts/lib/
 
 # node
 node_modules/

@@ -4,7 +4,8 @@
 - **curve**: secp256k1, BIP340 schnorr sigs (frost-secp256k1-tr)
 - **threshold**: 2-of-2
 - **participants**: user device (passkey-bound share) + co-signer service (server-held share)
-- **chain**: base, ERC-4337 smart account w/ onchain schnorr verifier
+- **main chain**: ethereum mainnet, EIP-7702-delegated EOA → ERC-4337-style SCA logic w/ onchain schnorr verifier
+- **cross-chain**: same EOA address works as a plain EOA on other chains via session keys (see below)
 
 ## share custody
 - **user share**: stored on-device, encrypted-at-rest w/ KEK derived from WebAuthn PRF extension over the user's passkey. passkey synced via platform (icloud keychain / google credential manager) for cross-device. share material itself stays local per device, KEK is what's portable.
@@ -17,12 +18,15 @@
 
 ## DKG (setup)
 1. user creates passkey on device, derives KEK via PRF
-2. client + co-signer run frost DKG ceremony over websocket relay
-3. both parties end with: their respective share, the joint pubkey `P`
-4. client encrypts share w/ KEK, stores locally
-5. user scans passport, generates zk-proof committing to attributes, sends to co-signer
-6. co-signer verifies proof, stores `H_passport` against account
-7. account contract deployed to base w/ `P` as the authorized signer
+2. client generates a fresh single-party ECDSA keypair `K` on device — gives the wallet an address `A`
+3. client + co-signer run frost DKG ceremony over websocket relay
+4. both parties end with: their respective share, the joint pubkey `P`
+5. client encrypts share w/ KEK, stores locally
+6. user scans passport, generates zk-proof committing to attributes, sends to co-signer
+7. co-signer verifies proof, stores `H_passport` against account
+8. client signs an EIP-7702 authorization with `K`: "delegate `A` → vouch SCA contract, init with `P`"
+9. submit the delegation tx (paymaster-sponsored or user-funded)
+10. **client deletes `K`** — address `A` is now permanently bound to vouch SCA logic; no admin escape hatch. trade-off: if SCA has a bug, user bridges out via session keys, can never undelegate.
 
 ## sign (normal flow)
 1. user constructs userop, computes hash
@@ -45,12 +49,32 @@
 6. new client encrypts new share w/ new device's KEK, stores
 7. signing resumes w/ new device + co-signer
 
-## onchain (4337 SCA)
-- account contract holds aggregate pubkey `P`
-- `validateUserOp(userop, sig)`: verifies sig is valid BIP340 schnorr sig under `P` over userop hash
-- schnorr verifier impl: ecrecover-as-ecmul trick (chainflip keymanager pattern), ~80-120k gas
+## onchain (main chain, EIP-7702 + 4337-style SCA)
+- user's wallet address `A` is a normal EOA address (derived from one-shot ECDSA key `K`, which was deleted after the 7702 delegation tx landed)
+- after delegation, `A` executes the vouch SCA contract code for every tx sent to it
+- SCA storage holds: aggregate pubkey `P`, session-key registry, replay nonces
+- `validateUserOp(userop, sig)`:
+  - if sig is a registered session-key ECDSA sig within policy → verify via ecrecover, ~3k gas
+  - else, verify sig is a valid BIP340 schnorr sig under `P` → ~80-120k gas via ecrecover-trick verifier (chainflip keymanager port)
 - no recovery logic onchain — `P` never changes across recoveries bc refresh ceremony preserves it. recovery is fully offchain
-- account contract is upgradeable-not via proxy admin (which would be a backdoor) but via the user signing a "rotate verifier" op if you ever want to change verification semantics. v0 doesn't need this
+- session keys: short-lived ECDSA keypairs registered by a FROST-signed userop. each carries a policy (expiry, spending cap, allowed call targets). expected to be the hot path for ~95% of userops — Schnorr verifier runs once per session, not once per tx
+- the SCA code is immutable from the user's perspective: there is no admin key, no proxy upgradeability, no way to redelegate `A` (because `K` is gone)
+
+## session keys
+- short-lived ECDSA keypairs registered in the main-chain SCA via a FROST-signed userop
+- per-key policy stored onchain: expiry timestamp, spending cap (total ETH/value moved), allowlist of call targets (e.g., specific dexes / tokens)
+- device holds the session-key private material; co-signer never sees it
+- in-session userops: ECDSA sig (3k gas) + policy check (5-10k storage reads) — full sign cost ~15k vs ~150k for direct FROST
+- revoke: any session key can be revoked early by a FROST-signed userop
+- compromised device blast radius is bounded by the active session's policy
+
+## cross-chain
+- same EOA address `A` works on every EVM chain (ECDSA pubkey → address is chain-agnostic)
+- on the main chain, `A` is 7702-delegated to vouch SCA — full threshold + recovery property
+- on other chains, `A` is undelegated by default — it's just a plain EOA, controlled by whichever session key the user is currently using
+- model: main chain is the **vault**, session keys are **spending wallets** that happen to act as plain EOAs cross-chain
+- flow: FROST-sign a userop on main chain to bridge value to a session key's address on chain X → session key signs txs on chain X as a normal EOA → leftover funds bridge back to vault when session expires
+- no onchain identity / recovery on non-main chains — those are intentionally low-trust spending environments. value at rest stays on main chain
 
 ## relay / coordination
 - websocket relay server, dumb message bus
@@ -83,12 +107,12 @@
 
 ## what's out of scope v0
 - federation (single co-signer)
-- gas abstraction / paymaster (user holds eth)
+- gas abstraction / paymaster (user holds eth on the main chain)
 - slow-path contract-based recovery backstop
 - zkemail factors
-- multi-chain
 - card / fiat rails
 - mobile-app-store distribution (testflight / web demo only)
+- bridge integration — cross-chain works via plain-EOA semantics; user does their own bridging in v0
 
 ## the actual interesting property
 recovery flow has zero personal-information disclosure to co-signer beyond the zk-proof. co-signer holds `H_passport` (an opaque commitment) and verifies proofs against it. they never learn the user's name, dob, passport number, or country directly. recovery is privacy-preserving by construction. afaict no existing recovery system has this property — kyc-based recoveries always reveal identity to the recovery provider.
