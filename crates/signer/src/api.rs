@@ -56,3 +56,47 @@ pub struct RecoverResponse {
     /// True if the H_passport matched a known account.
     pub matched: bool,
 }
+
+// ───── v0 demo "wallet" endpoints (server-held keys, see CLAUDE.md) ─────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletCreateRequest {
+    /// 32-byte H_passport commitment (hex). Bound to this account so
+    /// /v0/wallet/recover can find it later.
+    pub h_passport_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletCreateResponse {
+    pub account_address: String,
+    pub pub_x_hex: String,
+    pub deploy_tx_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletSignExecuteRequest {
+    pub account_address: String,
+    pub target: String, // hex-prefixed address
+    pub value: String,  // decimal wei
+    pub data: String,   // hex-prefixed bytes
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletSignExecuteResponse {
+    pub tx_hash: String,
+    pub op_hash_hex: String,
+    pub signature_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletRecoverRequest {
+    pub h_passport_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletRecoverResponse {
+    pub account_address: String,
+    pub old_pub_x_hex: String,
+    pub new_pub_x_hex: String,
+    pub rotation_tx_hash: String,
+}

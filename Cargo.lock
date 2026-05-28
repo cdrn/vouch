@@ -2045,6 +2045,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "frost-secp256k1-tr",
  "futures-util",
  "hex",
  "postcard",
@@ -2055,6 +2056,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "vouch-frost",
