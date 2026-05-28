@@ -38,14 +38,18 @@ done
 echo "→ pre-building gen_test_vector example (avoids cargo run noise later)"
 (cd "$ROOT" && cargo build -p vouch-frost --example gen_test_vector --quiet)
 
-echo "→ deploying VouchAccount(pubX=$PUB_X)"
+# Recovery authority — for the e2e demo, the deployer doubles as the
+# signer's recovery key. In production the signer service holds this key
+# in a TEE and only signs rotation messages after verifying a passport.
+RECOVERY_AUTH=$(cast wallet address --private-key $DEPLOYER_KEY)
+echo "→ deploying VouchAccount(pubX=$PUB_X, recovery=$RECOVERY_AUTH)"
 # NB: --constructor-args is greedy under foundry's CLI parser; it must come last.
 DEPLOY_OUT=$(cd "$ROOT/contracts" && forge create "src/VouchAccount.sol:VouchAccount" \
     --rpc-url $RPC \
     --private-key $DEPLOYER_KEY \
     --broadcast \
     --json \
-    --constructor-args $PUB_X)
+    --constructor-args $PUB_X $RECOVERY_AUTH)
 ACCOUNT=$(echo "$DEPLOY_OUT" | jq -r '.deployedTo')
 echo "   account: $ACCOUNT"
 
@@ -58,7 +62,8 @@ OP_HASH=$(cast keccak "$ENCODED")
 echo "   opHash:  $OP_HASH"
 
 echo "→ signing opHash via vouch-frost (deterministic 2-of-2 DKG + sign)"
-SIG=$("$ROOT/target/debug/examples/gen_test_vector" "${OP_HASH#0x}")
+SIG_OUT=$("$ROOT/target/debug/examples/gen_test_vector" "${OP_HASH#0x}")
+SIG=$(echo "$SIG_OUT" | cut -d: -f2)
 echo "   sig:     0x$SIG"
 
 echo "→ submitting execute() to $ACCOUNT"

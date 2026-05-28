@@ -12,36 +12,40 @@ contract VouchAccountTest is Test {
     /// (gen_test_vector example, ChaCha20 seed = [0; 32]).
     uint256 constant PUB_X =
         0x1dadf16e4070045223c0e8b48af3c9dfe70188ab731359b37bf86650be5d037e;
+    /// Recovery authority — derived from a known test private key.
+    uint256 constant RECOVERY_AUTH_PRIVKEY = 0xa11ce;
 
     VouchAccount account;
+    address recoveryAuth;
 
     function setUp() public {
-        // Build the runtime code by deploying with PUB_X, then etch at the
-        // pinned address — this gives us deterministic address + immutable.
-        VouchAccount tmp = new VouchAccount(PUB_X);
+        recoveryAuth = vm.addr(RECOVERY_AUTH_PRIVKEY);
+        VouchAccount tmp = new VouchAccount(PUB_X, recoveryAuth);
         vm.etch(ACCOUNT_ADDR, address(tmp).code);
-        // Copy the immutable slot too. Foundry's vm.etch copies code but
-        // immutables are baked into the runtime code, so this just works.
+        // vm.etch copies code (and immutables baked into code) but not
+        // storage. Initialise pubX in slot 0 manually.
+        vm.store(ACCOUNT_ADDR, bytes32(uint256(0)), bytes32(PUB_X));
         account = VouchAccount(payable(ACCOUNT_ADDR));
         vm.chainId(31337);
     }
 
     function test_PubKeyStoredAtDeploy() public view {
         assertEq(account.pubX(), PUB_X);
+        assertEq(account.recoveryAuthority(), recoveryAuth);
     }
 
     function test_ConstructorRejectsZeroPubKey() public {
         vm.expectRevert(VouchAccount.InvalidPubKey.selector);
-        new VouchAccount(0);
+        new VouchAccount(0, recoveryAuth);
+    }
+
+    function test_ConstructorRejectsZeroRecoveryAuthority() public {
+        vm.expectRevert(VouchAccount.ZeroRecoveryAuthority.selector);
+        new VouchAccount(PUB_X, address(0));
     }
 
     /// End-to-end: deploy + execute with a real vouch-frost-aggregated
     /// schnorr signature over the contract's computed opHash.
-    ///
-    /// The signature below was produced by:
-    ///   1. computing opHash for (target=0xCAFE..., value=0, data="", nonce=0,
-    ///      chainid=31337, account=0x1234...) → 0xbf641d18...72cfcd
-    ///   2. cargo run -p vouch-frost --example gen_test_vector -- bf641d18...72cfcd
     function test_ExecuteWithVouchFrostSig() public {
         address target = 0xCAFE000000000000000000000000000000000000;
         uint256 value = 0;
@@ -66,5 +70,55 @@ contract VouchAccountTest is Test {
         bytes memory badSig = new bytes(64);
         vm.expectRevert(VouchAccount.InvalidSignature.selector);
         account.execute(address(0xCAFE), 0, "", badSig);
+    }
+
+    // ───── rotation tests ────────────────────────────────────────────────
+
+    function test_RotateAcceptsAuthorizedSig() public {
+        uint256 newPubX = 0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef;
+        bytes memory sig = _signRotation(newPubX, RECOVERY_AUTH_PRIVKEY);
+
+        account.rotatePubKey(newPubX, sig);
+        assertEq(account.pubX(), newPubX, "pubX must rotate");
+        assertEq(account.rotationNonce(), 1, "rotationNonce must increment");
+    }
+
+    function test_RotateRejectsWrongSigner() public {
+        uint256 newPubX = 0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef;
+        bytes memory sig = _signRotation(newPubX, 0xb0b);
+        vm.expectRevert(VouchAccount.InvalidRecoverySignature.selector);
+        account.rotatePubKey(newPubX, sig);
+    }
+
+    function test_RotateRejectsReplay() public {
+        uint256 newPubX = 0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef;
+        bytes memory sig = _signRotation(newPubX, RECOVERY_AUTH_PRIVKEY);
+        account.rotatePubKey(newPubX, sig);
+        // rotationNonce bumped, same sig should now fail.
+        vm.expectRevert(VouchAccount.InvalidRecoverySignature.selector);
+        account.rotatePubKey(newPubX, sig);
+    }
+
+    function test_RotateRejectsZeroPubKey() public {
+        bytes memory sig = _signRotation(0, RECOVERY_AUTH_PRIVKEY);
+        vm.expectRevert(VouchAccount.InvalidPubKey.selector);
+        account.rotatePubKey(0, sig);
+    }
+
+    function test_RotateRejectsMalformedSig() public {
+        vm.expectRevert(VouchAccount.MalformedRecoverySig.selector);
+        account.rotatePubKey(uint256(1), new bytes(64));
+    }
+
+    function _signRotation(uint256 newPubX, uint256 privkey)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 digest = account.rotationDigest(newPubX);
+        bytes32 ethDigest =
+            keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privkey, ethDigest);
+        return abi.encodePacked(r, s, v);
     }
 }
